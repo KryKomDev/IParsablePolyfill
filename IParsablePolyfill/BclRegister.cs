@@ -3,6 +3,8 @@ using System.Net;
 using System.Numerics;
 using Implyzer;
 
+// ReSharper disable BuiltInTypeReferenceStyle
+
 [assembly: StaticRegister(
     typeof(SByte),
     typeof(Byte),
