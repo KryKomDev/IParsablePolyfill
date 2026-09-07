@@ -1,0 +1,144 @@
+name: Publish and release IParsablePolyfill
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version (overrides csproj, e.g. 1.2.3)'
+        required: false
+        type: string
+
+env:
+  SolutionName: ./IParsablePolyfill.slnx
+  ProjectPath: ./IParsablePolyfill/IParsablePolyfill.csproj
+  NugetOutputDir: ./nupkg/
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '10.0.x'
+
+    - name: Restore dependencies
+      run: dotnet restore ${{ env.SolutionName }} --ignore-failed-sources
+
+    - name: Get version
+      id: get_version
+      run: |
+        if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          # Extract version from tag (strip 'v' prefix if present)
+          VERSION=${GITHUB_REF_NAME#v}
+        elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION=""
+        fi
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+      shell: bash
+
+    - name: Build
+      run: dotnet build ${{ env.ProjectPath }} --configuration Release --no-restore
+      
+    - name: Run Sample Verification
+      run: dotnet run Sample.cs
+
+    - name: Pack
+      run: |
+        VERSION_ARG=""
+        if [ -n "${{ steps.get_version.outputs.version }}" ]; then
+          VERSION_ARG="/p:Version=${{ steps.get_version.outputs.version }}"
+        fi
+        dotnet pack ${{ env.ProjectPath }} --configuration Release --no-build --output ${{ env.NugetOutputDir }} $VERSION_ARG
+      shell: bash
+    
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v5
+      with:
+        name: build-artifacts
+        path: |
+          ${{ env.NugetOutputDir }}
+          ./IParsablePolyfill/bin/Release/netstandard2.0/IParsablePolyfill.dll
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.version != ''
+    
+    steps:
+    - name: Download Build Artifacts
+      uses: actions/download-artifact@v5
+      with:
+        name: build-artifacts
+        path: artifacts
+
+    - name: NuGet Login
+      uses: NuGet/login@v1
+      id: login
+      with:
+        user: ${{ vars.NUGET_USERNAME || secrets.NUGET_USERNAME }}
+
+    - name: Push to NuGet
+      run: |
+        # Use simple glob expansion in shell
+        for f in artifacts/${{ env.NugetOutputDir }}*.nupkg; do
+          if [[ "$f" != *"symbols.nupkg" ]]; then
+            dotnet nuget push "$f" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json
+          fi
+        done
+      shell: bash
+          
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.version != ''
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+
+    - name: Download Build Artifacts
+      uses: actions/download-artifact@v5
+      with:
+        name: build-artifacts
+        path: artifacts
+
+    - name: Generate Release Notes
+      id: release_notes
+      run: |
+        echo "commits<<EOF" >> $GITHUB_OUTPUT
+        # Get commits from the beginning or previous tag.
+        PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        
+        if [ -z "$PREV_TAG" ]; then
+          git log --pretty=format:"* %s" >> $GITHUB_OUTPUT
+        else
+          git log $PREV_TAG..HEAD --pretty=format:"* %s" >> $GITHUB_OUTPUT
+        fi
+        echo "" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+      shell: bash
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || format('v{0}', github.event.inputs.version) }}
+        body: ${{ steps.release_notes.outputs.commits }}
+        files: |
+          artifacts/nupkg/*.nupkg
