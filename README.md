@@ -1,6 +1,6 @@
 <div align="center">
 
-# IParsablePolyfill
+# IParsable Polyfill
 
 A backward-compatible `IParsable<TSelf>` polyfill for .NET down to .NET Standard 2.0, powered by [Implyzer](https://github.com/KryKomDev/Implyzer).
 
