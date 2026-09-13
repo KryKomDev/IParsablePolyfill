@@ -9,6 +9,8 @@ using Implyzer;
 
 namespace IParsablePolyfill;
 
+// ReSharper disable once PartialTypeWithSinglePart
+
 /// <summary>
 /// Defines a mechanism for parsing a string to a value. Works as a replacement for
 /// <see cref="IParsable{TSelf}"/>.
